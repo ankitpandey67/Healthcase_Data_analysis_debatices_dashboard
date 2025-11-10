@@ -1,0 +1,207 @@
+library(shiny)
+library(shinydashboard)
+library(shinycssloaders)
+library(ggplot2)
+library(tidyverse)
+library(caret)
+library(corrplot)
+library(ROCR)
+library(caTools)
+library(randomForest)
+library(pheatmap)
+
+# -----------------------------------------
+# ---- UI ----
+# -----------------------------------------
+ui <- dashboardPage(
+  skin = "blue",
+  
+  dashboardHeader(title = "Healthcare & CSV Analytics"),
+  
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Overview", tabName = "overview", icon = icon("info-circle")),
+      menuItem("Upload CSV", tabName = "upload", icon = icon("upload")),
+      menuItem("Auto Visualizations", tabName = "visualCSV", icon = icon("chart-bar")),
+      menuItem("Predict Diabetes", tabName = "predict", icon = icon("heartbeat"))
+    )
+  ),
+  
+  dashboardBody(
+    tags$head(tags$style(HTML("
+      .overview-title {
+        font-size: 32px;
+        font-weight: 700;
+        color: #1A237E;
+        text-align: center;
+        margin-bottom: 20px;
+      }
+      .info-card {
+        background: #ffffff;
+        border-radius: 18px;
+        padding: 20px;
+        box-shadow: 0 6px 15px rgba(0,0,0,0.1);
+        border-left: 7px solid #1976D2;
+        transition: 0.3s;
+      }
+      .info-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 22px rgba(0,0,0,0.15);
+      }
+      .summary-card {
+        background: linear-gradient(135deg, #00BCD4, #2196F3);
+        color: white;
+        border-radius: 18px;
+        padding: 20px;
+        box-shadow: 0 6px 15px rgba(0,0,0,0.15);
+        border-left: 7px solid white;
+      }
+    "))),
+    
+    tabItems(
+      
+      # ✅ OVERVIEW PAGE (same as before)
+      tabItem(tabName="overview",
+              div(class="overview-title", icon("stethoscope"), " Healthcare Data Insights Dashboard"),
+              
+              fluidRow(
+                column(6,
+                       div(class="info-card",
+                           h3(icon("info-circle"), " About Project"),
+                           p("This dashboard analyzes health & CSV data automatically."),
+                           p("Upload any CSV and visualize instantly.")
+                       )
+                ),
+                column(6,
+                       div(class="summary-card",
+                           h3(icon("chart-area"), " Auto Data Summary Enabled"),
+                           p("Upload any CSV → Summary → Graphs → Correlations")
+                       )
+                )
+              )
+      ),
+      
+      # ✅ CSV UPLOAD PAGE
+      tabItem(tabName="upload",
+              h2("📂 Upload CSV File"),
+              fileInput("file", "Choose CSV", accept = ".csv"),
+              tableOutput("tableHead")
+      ),
+      
+      # ✅ AUTO VISUALIZATION PAGE
+      tabItem(tabName="visualCSV",
+              h2("📈 Automatic Data Visualizations"),
+              
+              uiOutput("colSelectors"),
+              
+              fluidRow(
+                box(title="Correlation Heatmap", width=6,
+                    withSpinner(plotOutput("corrCSV"), color="#E91E63")),
+                box(title="Histogram", width=6,
+                    withSpinner(plotOutput("histCSV"), color="#1976D2"))
+              ),
+              
+              fluidRow(
+                box(title="Scatter Plot", width=12,
+                    withSpinner(plotOutput("scatterCSV"), color="#4CAF50"))
+              )
+      ),
+      
+      # ✅ PREDICT DIABETES (same as before – uses Pima dataset)
+      tabItem(tabName = "predict",
+              h3("🧍 Predict Diabetes for a New Patient"),
+              box(width = 4, solidHeader = TRUE, status = "primary",
+                  sliderInput("Pregnancies", "Pregnancies:", 0, 15, 2),
+                  sliderInput("Glucose", "Glucose Level:", 50, 200, 120),
+                  sliderInput("BloodPressure", "Blood Pressure:", 40, 130, 70),
+                  sliderInput("BMI", "BMI:", 15, 50, 25),
+                  sliderInput("Age", "Age:", 20, 80, 35),
+                  actionButton("predictBtn", "Predict Diabetes")
+              ),
+              box(width = 8, solidHeader=TRUE, status="success",
+                  h2(textOutput("predResult")),
+                  h4(textOutput("predProb"))
+              )
+      )
+    )
+  )
+)
+
+# -----------------------------------------
+# ---- SERVER ----
+# -----------------------------------------
+server <- function(input, output) {
+  
+  # ✅ READ CSV
+  csvData <- reactive({
+    req(input$file)
+    read.csv(input$file$datapath)
+  })
+  
+  output$tableHead <- renderTable({
+    req(csvData())
+    head(csvData())
+  })
+  
+  # ✅ Dynamic Column Selectors
+  output$colSelectors <- renderUI({
+    req(csvData())
+    numericCols <- names(csvData()[, sapply(csvData(), is.numeric)])
+    tagList(
+      selectInput("histCol", "Histogram Column:", numericCols),
+      selectInput("xCol", "X-Axis:", numericCols),
+      selectInput("yCol", "Y-Axis:", numericCols)
+    )
+  })
+  
+  # ✅ Histogram
+  output$histCSV <- renderPlot({
+    req(csvData(), input$histCol)
+    ggplot(csvData(), aes_string(input$histCol)) +
+      geom_histogram(fill="blue", color="white") + theme_minimal()
+  })
+  
+  # ✅ Scatter Plot
+  output$scatterCSV <- renderPlot({
+    req(csvData(), input$xCol, input$yCol)
+    ggplot(csvData(), aes_string(input$xCol, input$yCol)) +
+      geom_point(color="red", size=3) + theme_minimal()
+  })
+  
+  # ✅ Correlation Heatmap
+  output$corrCSV <- renderPlot({
+    req(csvData())
+    numData <- csvData()[, sapply(csvData(), is.numeric)]
+    corrplot(cor(numData), method="color")
+  })
+  
+  # ✅ Diabetes Prediction Model (same as before)
+  url <- "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv"
+  colnames <- c("Pregnancies","Glucose","BloodPressure","SkinThickness","Insulin",
+                "BMI","DiabetesPedigreeFunction","Age","Outcome")
+  db <- read.csv(url, header = FALSE, col.names = colnames)
+  
+  db$Glucose[db$Glucose==0] <- NA
+  db$BloodPressure[db$BloodPressure==0] <- NA
+  db$BMI[db$BMI==0] <- NA
+  db <- na.omit(db)
+  
+  model <- glm(Outcome ~ ., data=db, family=binomial)
+  
+  observeEvent(input$predictBtn,{
+    newPatient <- data.frame(
+      Pregnancies=input$Pregnancies, Glucose=input$Glucose,
+      BloodPressure=input$BloodPressure, SkinThickness=mean(db$SkinThickness),
+      Insulin=mean(db$Insulin), BMI=input$BMI,
+      DiabetesPedigreeFunction=mean(db$DiabetesPedigreeFunction),
+      Age=input$Age)
+    
+    prob <- predict(model, newPatient, type="response")
+    res <- ifelse(prob>0.5, "🩸 Likely Diabetic", "✅ Not Diabetic")
+    
+    output$predResult <- renderText({res})
+    output$predProb <- renderText({paste("Probability:", round(prob*100,2), "%")})
+  })
+}
+
+shinyApp(ui, server)
